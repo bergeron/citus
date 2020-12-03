@@ -86,6 +86,9 @@
  */
 #define LOG_PER_TUPLE_AMOUNT 1000000
 
+/* Table Conversion Types */
+#define UNDISTRIBUTE_TABLE 'u'
+
 /* Replication model to use when creating distributed tables */
 int ReplicationModel = REPLICATION_MODEL_COORDINATOR;
 
@@ -114,6 +117,10 @@ static bool ShouldLocalTableBeEmpty(Oid relationId, char distributionMethod, boo
 									viaDeprecatedAPI);
 static void EnsureCitusTableCanBeCreated(Oid relationOid);
 static void EnsureRelationExists(Oid relationId);
+static void EnsureTableNotReferencing(Oid relationId);
+static void EnsureTableNotReferenced(Oid relationId);
+static void EnsureTableNotForeign(Oid relationId);
+static void EnsureTableNotPartition(Oid relationId);
 static bool LocalTableEmpty(Oid tableId);
 static void CopyLocalDataIntoShards(Oid relationId);
 static List * TupleDescColumnNameList(TupleDesc tupleDescriptor);
@@ -128,6 +135,7 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 static void UndistributeTable(Oid relationId);
 static List * GetViewCreationCommandsOfTable(Oid relationId);
 static void ReplaceTable(Oid sourceId, Oid targetId);
+static void ConvertTable(char conversionType, Oid relationId);
 
 /* exports for SQL callable functions */
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
@@ -336,6 +344,67 @@ EnsureRelationExists(Oid relationId)
 		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("relation with OID %d does not exist",
 							   relationId)));
+	}
+}
+
+
+/*
+ * EnsureTableNotReferencing checks if the table has a reference to another
+ * table and errors if it is.
+ */
+void EnsureTableNotReferencing(Oid relationId)
+{
+	if (TableReferencing(relationId))
+	{
+		ereport(ERROR, (errmsg("cannot complete operation "
+							   "because table has a foreign key")));
+	}
+}
+
+
+/*
+ * EnsureTableNotReferenced checks if the table is referenced by another
+ * table and errors if it is.
+ */
+void EnsureTableNotReferenced(Oid relationId)
+{
+	if (TableReferenced(relationId))
+	{
+		ereport(ERROR, (errmsg("cannot complete operation "
+							   "because a foreign key references to table")));
+	}
+}
+
+
+/*
+ * EnsureTableNotForeign checks if the table is a foreign table and errors
+ * if it is.
+ */
+void EnsureTableNotForeign(Oid relationId)
+{
+	char relationKind = get_rel_relkind(relationId);
+	if (relationKind == RELKIND_FOREIGN_TABLE)
+	{
+		ereport(ERROR, (errmsg("cannot complete operation "
+							   "because it is a foreign table")));
+	}
+}
+
+
+/*
+ * EnsureTableNotPartition checks if the table is a partition of another
+ * table and errors if it is.
+ */
+void EnsureTableNotPartition(Oid relationId)
+{
+	if (PartitionTable(relationId))
+	{
+		Oid parentRelationId = PartitionParentOid(relationId);
+		char *parentRelationName = get_rel_name(parentRelationId);
+		ereport(ERROR, (errmsg("cannot complete operation "
+							   "because table is a partition"),
+						errhint("the parent table is \"%s\"",
+								parentRelationName)));
 	}
 }
 
@@ -1539,84 +1608,37 @@ DistributionColumnUsesGeneratedStoredColumn(TupleDesc relationDesc,
 
 
 /*
- * UndistributeTable undistributes the given table. The undistribution is done by
- * creating a new table, moving everything to the new table and dropping the old one.
- * So the oid of the table is not preserved.
+ * ConvertTable is used for converting a table into a new table with different properties.
+ * The conversion is done by creating a new table, moving everything to the new table and
+ * dropping the old one. So the oid of the table is not preserved.
  *
- * The undistributed table will have the same name, columns and rows. It will also have
- * partitions, views, sequences of the old table. Finally it will have everything created
- * by GetPostLoadTableCreationCommands function, which include indexes. These will be
- * re-created during undistribution, so their oids are not preserved either (except for
+ * The new table will have the same name, columns and rows. It will also have partitions,
+ * views, sequences of the old table. Finally it will have everything created by
+ * GetPostLoadTableCreationCommands function, which include indexes. These will be
+ * re-created during conversion, so their oids are not preserved either (except for
  * sequences). However, their names are preserved.
- *
- * The tables with references are not supported. The function gives an error if there are
- * any references to or from the table.
  *
  * The dropping of old table is done with CASCADE. Anything not mentioned here will
  * be dropped.
  */
 void
-UndistributeTable(Oid relationId)
+ConvertTable(char conversionType, Oid relationId)
 {
-	Relation relation = try_relation_open(relationId, ExclusiveLock);
-	if (relation == NULL)
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table"),
-						errdetail("because no such distributed table exists")));
-	}
-
-	relation_close(relation, NoLock);
-
-	if (!IsCitusTable(relationId))
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "),
-						errdetail("because the table is not distributed")));
-	}
-
-	if (TableReferencing(relationId))
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because it has a foreign key")));
-	}
-
-	if (TableReferenced(relationId))
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because a foreign key references to it")));
-	}
-
-	char relationKind = get_rel_relkind(relationId);
-	if (relationKind == RELKIND_FOREIGN_TABLE)
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because it is a foreign table")));
-	}
-
-	if (PartitionTable(relationId))
-	{
-		Oid parentRelationId = PartitionParentOid(relationId);
-		char *parentRelationName = get_rel_name(parentRelationId);
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because it is a partition"),
-						errhint("undistribute the partitioned table \"%s\" instead",
-								parentRelationName)));
-	}
-
 	List *preLoadCommands = GetPreLoadTableCreationCommands(relationId, true);
 	List *postLoadCommands = GetPostLoadTableCreationCommands(relationId);
 
 	postLoadCommands = list_concat(postLoadCommands,
 								   GetViewCreationCommandsOfTable(relationId));
 
+	char *relationName = get_rel_name(relationId);
+	Oid schemaId = get_rel_namespace(relationId);
+	char *schemaName = get_namespace_name(schemaId);
+
 	int spiResult = SPI_connect();
 	if (spiResult != SPI_OK_CONNECT)
 	{
 		ereport(ERROR, (errmsg("could not connect to SPI manager")));
 	}
-
-	char *relationName = get_rel_name(relationId);
-	Oid schemaId = get_rel_namespace(relationId);
-	char *schemaName = get_namespace_name(schemaId);
 
 	if (PartitionedTable(relationId))
 	{
@@ -1641,8 +1663,11 @@ UndistributeTable(Oid relationId)
 			}
 			preLoadCommands = lappend(preLoadCommands,
 									  makeTableDDLCommandString(attachPartitionCommand));
-			UndistributeTable(partitionRelationId);
-		}
+			
+			if (conversionType == UNDISTRIBUTE_TABLE)
+			{
+				UndistributeTable(partitionRelationId);
+			}
 	}
 
 	char *tempName = pstrdup(relationName);
@@ -1650,7 +1675,7 @@ UndistributeTable(Oid relationId)
 	AppendShardIdToName(&tempName, hashOfName);
 
 
-	ereport(NOTICE, (errmsg("creating a new local table for %s",
+	ereport(NOTICE, (errmsg("creating a new table for %s",
 							quote_qualified_identifier(schemaName, relationName))));
 
 	TableDDLCommand *tableCreationCommand = NULL;
@@ -1685,6 +1710,40 @@ UndistributeTable(Oid relationId)
 	{
 		ereport(ERROR, (errmsg("could not finish SPI connection")));
 	}
+}
+
+
+/*
+ * UndistributeTable undistributes the given table. It uses ConvertTable function to
+ * create a new local table and move everything to that table.
+ * 
+ * The local tables, tables with references, partition tables and foreign tables are
+ * not supported. The function gives errors in these cases.
+ */
+void
+UndistributeTable(Oid relationId)
+{
+	Relation relation = try_relation_open(relationId, ExclusiveLock);
+	if (relation == NULL)
+	{
+		ereport(ERROR, (errmsg("cannot undistribute table "
+							   "because no such distributed table exists")));
+	}
+
+	relation_close(relation, NoLock);
+
+	if (!IsCitusTable(relationId))
+	{
+		ereport(ERROR, (errmsg("cannot undistribute table "
+							   "because the table is not distributed")));
+	}
+
+	EnsureTableNotReferencing(relationId);
+	EnsureTableNotReferenced(relationId);
+	EnsureTableNotForeign(relationId);
+	EnsureTableNotPartition(relationId);
+
+	ConvertTable(UNDISTRIBUTE_TABLE, relationId);
 }
 
 
@@ -1776,11 +1835,9 @@ ReplaceTable(Oid sourceId, Oid targetId)
 	ereport(NOTICE, (errmsg("Renaming the new table to %s",
 							quote_qualified_identifier(schemaName, sourceName))));
 
-#if PG_VERSION_NUM >= PG_VERSION_12
-	RenameRelationInternal(targetId,
-						   sourceName, false, false);
-#else
-	RenameRelationInternal(targetId,
-						   sourceName, false);
-#endif
+	resetStringInfo(query);
+	appendStringInfo(query, "ALTER TABLE %s RENAME TO %s",
+					 quote_qualified_identifier(schemaName, targetName),
+					 quote_identifier(sourceName));
+	spiResult = SPI_execute(query->data, false, 0);
 }

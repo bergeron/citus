@@ -169,7 +169,7 @@ INSERT INTO upsert_test (part_key, other_col) SELECT part_key, other_col FROM up
 COMMIT;
 -- to test citus local tables
 select undistribute_table('upsert_test');
-NOTICE:  creating a new local table for single_node.upsert_test
+NOTICE:  creating a new table for single_node.upsert_test
 NOTICE:  Moving the data of single_node.upsert_test
 NOTICE:  Dropping the old single_node.upsert_test
 NOTICE:  Renaming the new table to single_node.upsert_test
@@ -975,7 +975,7 @@ RESET citus.task_executor_type;
 -- make sure undistribute table works fine
 ALTER TABLE test DROP CONSTRAINT foreign_key;
 SELECT undistribute_table('test_2');
-NOTICE:  creating a new local table for single_node.test_2
+NOTICE:  creating a new table for single_node.test_2
 NOTICE:  Moving the data of single_node.test_2
 NOTICE:  Dropping the old single_node.test_2
 NOTICE:  Renaming the new table to single_node.test_2
