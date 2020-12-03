@@ -17,6 +17,7 @@ ORDER BY 1;
                                                description
 ---------------------------------------------------------------------
  event trigger citus_cascade_to_partition
+ function alter_distributed_table(regclass,text,integer,text,boolean)
  function alter_role_if_exists(text,text)
  function any_value(anyelement)
  function any_value_agg(anyelement,anyelement)
@@ -214,5 +215,5 @@ ORDER BY 1;
  view citus_tables
  view citus_worker_stat_activity
  view pg_dist_shard_placement
-(198 rows)
+(199 rows)
 

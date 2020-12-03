@@ -88,6 +88,7 @@
 
 /* Table Conversion Types */
 #define UNDISTRIBUTE_TABLE 'u'
+#define ALTER_DISTRIBUTED_TABLE 'a'
 
 /* Replication model to use when creating distributed tables */
 int ReplicationModel = REPLICATION_MODEL_COORDINATOR;
@@ -133,15 +134,18 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 										   TupleTableSlot *slot,
 										   EState *estate);
 static void UndistributeTable(Oid relationId);
+static void AlterDistributedTable(Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated);
 static List * GetViewCreationCommandsOfTable(Oid relationId);
 static void ReplaceTable(Oid sourceId, Oid targetId);
-static void ConvertTable(char conversionType, Oid relationId);
+static void ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated);
+static void AlterDistributedTableMessages(Oid relationId, char *distributionColumn, bool shardCountIsNull, int shardCount, char *colocateWith, bool cascadeToColocatedIsNull, bool cascadeToColocated);
 
 /* exports for SQL callable functions */
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
 PG_FUNCTION_INFO_V1(create_distributed_table);
 PG_FUNCTION_INFO_V1(create_reference_table);
 PG_FUNCTION_INFO_V1(undistribute_table);
+PG_FUNCTION_INFO_V1(alter_distributed_table);
 
 
 /*
@@ -305,6 +309,60 @@ undistribute_table(PG_FUNCTION_ARGS)
 	EnsureTableOwner(relationId);
 
 	UndistributeTable(relationId);
+
+	PG_RETURN_VOID();
+}
+
+
+/*
+ * alter_distributed_table gets a distributed table and some other
+ * parameters and alters some properties of the table according to
+ * the parameters.
+ */
+Datum
+alter_distributed_table(PG_FUNCTION_ARGS)
+{
+	Oid relationId = InvalidOid;
+	relationId = PG_GETARG_OID(0);
+	
+	char *distributionColumn = NULL;
+	if (!PG_ARGISNULL(1))
+	{
+		text *distributionColumnText = PG_GETARG_TEXT_P(1);
+		distributionColumn = text_to_cstring(distributionColumnText);
+	}
+
+	int shardCount = 0;
+	bool shardCountIsNull = true;
+	if (!PG_ARGISNULL(2))
+	{
+		shardCount = PG_GETARG_INT32(2);
+		shardCountIsNull = false;
+	}
+
+	char *colocateWith = NULL;
+	if (!PG_ARGISNULL(3))
+	{
+		text *colocateWithText = PG_GETARG_TEXT_P(3);
+		colocateWith = text_to_cstring(colocateWithText);
+	}
+
+	bool cascadeToColocated = false;
+	bool cascadeToColocatedIsNull = true;
+	if (!PG_ARGISNULL(4))
+	{
+		cascadeToColocated = PG_GETARG_BOOL(4);
+		cascadeToColocatedIsNull = false;
+	}
+
+	CheckCitusVersion(ERROR);
+	EnsureCoordinator();
+	EnsureRelationExists(relationId);
+	EnsureTableOwner(relationId);
+
+	AlterDistributedTableMessages(relationId, distributionColumn, shardCountIsNull, shardCount, colocateWith, cascadeToColocatedIsNull, cascadeToColocated);
+
+	AlterDistributedTable(relationId, distributionColumn, shardCount, colocateWith, cascadeToColocated);
 
 	PG_RETURN_VOID();
 }
@@ -1622,8 +1680,21 @@ DistributionColumnUsesGeneratedStoredColumn(TupleDesc relationDesc,
  * be dropped.
  */
 void
-ConvertTable(char conversionType, Oid relationId)
+ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated)
 {
+	List *colocatedTableList = NIL;
+	if (cascadeToColocated)
+	{
+		colocatedTableList = ColocatedTableList(relationId);
+	}
+
+	bool shardCountIsNull = false;
+	if (shardCount == 0)
+	{
+		CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(relationId);
+		shardCount = cacheEntry -> shardIntervalArrayLength;
+		shardCountIsNull = true;
+	}
 	List *preLoadCommands = GetPreLoadTableCreationCommands(relationId, true);
 	List *postLoadCommands = GetPostLoadTableCreationCommands(relationId);
 
@@ -1668,6 +1739,11 @@ ConvertTable(char conversionType, Oid relationId)
 			{
 				UndistributeTable(partitionRelationId);
 			}
+			else if (conversionType == ALTER_DISTRIBUTED_TABLE)
+			{
+				AlterDistributedTable(partitionRelationId, NULL, shardCount, NULL, false);
+			}
+		}
 	}
 
 	char *tempName = pstrdup(relationName);
@@ -1691,6 +1767,40 @@ ConvertTable(char conversionType, Oid relationId)
 							NULL, None_Receiver, NULL);
 	}
 
+	if (conversionType == ALTER_DISTRIBUTED_TABLE)
+	{
+		Var *distributionKey = NULL;
+
+		if (distributionColumn)
+		{
+			Relation relation = try_relation_open(relationId, ExclusiveLock);
+			relation_close(relation, NoLock);
+			distributionKey = BuildDistributionKeyFromColumnName(relation,
+																 distributionColumn);
+		}
+		else
+		{
+			distributionKey = DistPartitionKey(relationId);
+		}
+
+		if (colocateWith == NULL)
+		{
+			Var *originalDistributionKey = DistPartitionKey(relationId);
+			if ((distributionColumn == NULL || originalDistributionKey->vartype == distributionKey->vartype) && shardCountIsNull)
+			{
+				StringInfo qualifiedRelationName = makeStringInfo();
+				appendStringInfo(qualifiedRelationName, "%s.%s", schemaName, relationName);
+				colocateWith = qualifiedRelationName->data;
+			}
+			else
+			{
+				colocateWith = "default";
+			}
+		}
+		char partitionMethod = PartitionMethod(relationId);
+		CreateDistributedTable(get_relname_relid(tempName, schemaId), distributionKey, partitionMethod, shardCount, colocateWith, false);
+	}
+
 	ReplaceTable(relationId, get_relname_relid(tempName, schemaId));
 
 	TableDDLCommand *tableConstructionCommand = NULL;
@@ -1709,6 +1819,26 @@ ConvertTable(char conversionType, Oid relationId)
 	if (spiResult != SPI_OK_FINISH)
 	{
 		ereport(ERROR, (errmsg("could not finish SPI connection")));
+	}
+	
+	if (cascadeToColocated)
+	{
+		Oid colocatedTableId = InvalidOid;
+		// For now we only support cascade to colocation for alter_distributed_table UDF
+		Assert(conversionType == ALTER_DISTRIBUTED_TABLE);
+		foreach_oid(colocatedTableId, colocatedTableList)
+		{
+			if (colocatedTableId == relationId)
+			{
+				continue;
+			}
+			if (conversionType == ALTER_DISTRIBUTED_TABLE)
+			{
+				StringInfo qualifiedRelationName = makeStringInfo();
+				appendStringInfo(qualifiedRelationName, "%s.%s", schemaName, relationName);
+				AlterDistributedTable(colocatedTableId, NULL, shardCount, qualifiedRelationName->data, false);
+			}
+		}
 	}
 }
 
@@ -1743,7 +1873,59 @@ UndistributeTable(Oid relationId)
 	EnsureTableNotForeign(relationId);
 	EnsureTableNotPartition(relationId);
 
-	ConvertTable(UNDISTRIBUTE_TABLE, relationId);
+	ConvertTable(UNDISTRIBUTE_TABLE, relationId, NULL, 0, NULL, false);
+}
+
+
+/*
+ * AlterDistributedTable changes some properties of the given table. It uses
+ * ConvertTable function to create a new local table and move everything to that table.
+ * 
+ * The local and reference tables, tables with references, partition tables and foreign
+ * tables are not supported. The function gives errors in these cases.
+ */
+void
+AlterDistributedTable(Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated)
+{
+	Relation relation = try_relation_open(relationId, ExclusiveLock);
+
+	if (relation == NULL)
+	{
+		ereport(ERROR, (errmsg("cannot undistribute table "
+							   "because no such distributed table exists")));
+	}
+	relation_close(relation, NoLock);
+
+	if (!IsCitusTableType(relationId, DISTRIBUTED_TABLE))
+	{
+		ereport(ERROR, (errmsg("cannot undistribute table "
+							   "because the table is not distributed")));
+	}
+
+	EnsureTableNotReferencing(relationId);
+	EnsureTableNotReferenced(relationId);
+	EnsureTableNotForeign(relationId);
+	EnsureTableNotPartition(relationId);
+	if (colocateWith != NULL && strcmp(colocateWith, "default") != 0 && strcmp(colocateWith, "none") != 0)
+	{	
+		text *colocateWithText = cstring_to_text(colocateWith);
+		Oid colocateWithTableOid = ResolveRelationId(colocateWithText, false);
+		CitusTableCacheEntry *colocateWithTableCacheEntry = GetCitusTableCacheEntry(colocateWithTableOid);
+		int colocateWithTableShardCount = colocateWithTableCacheEntry -> shardIntervalArrayLength;
+
+		if (shardCount != 0 && shardCount != colocateWithTableShardCount)
+		{
+			ereport(ERROR, (errmsg("shard_count cannot be different than the shard "
+								   "count of the table in colocate_with"),
+							errhint("if no shard_count is specified shard count "
+									"will be same with colocate_with table's")));
+		}
+
+		/*shardCount is either 0 or already same with colocateWith table's*/
+		shardCount = colocateWithTableShardCount;
+	}
+
+	ConvertTable(ALTER_DISTRIBUTED_TABLE, relationId, distributionColumn, shardCount, colocateWith, NULL, cascadeToColocated);
 }
 
 
@@ -1840,4 +2022,86 @@ ReplaceTable(Oid sourceId, Oid targetId)
 					 quote_qualified_identifier(schemaName, targetName),
 					 quote_identifier(sourceName));
 	spiResult = SPI_execute(query->data, false, 0);
+}
+
+
+/*
+ * AlterDistributedTableMessages errors for the cases where
+ * alter_distributed_table UDF wouldn't work.
+ */
+void AlterDistributedTableMessages(Oid relationId, char *distributionColumn, bool shardCountIsNull, int shardCount, char *colocateWith, bool cascadeToColocatedIsNull, bool cascadeToColocated)
+{
+	/* Changing nothing is not allowed */
+	if (distributionColumn == NULL && shardCountIsNull && colocateWith == NULL && (cascadeToColocatedIsNull || cascadeToColocated == false))
+	{
+		ereport(ERROR, (errmsg("you have to specify something to alter on table"),
+						errdetail("give at least one of the distribution_column, shard_count or colocate_with parameters")));
+	}
+
+	/*Error for no operation UDF calls. First, check distribution column. */
+	if (distributionColumn != NULL)
+	{
+		Relation relation = try_relation_open(relationId, ExclusiveLock);
+		relation_close(relation, NoLock);
+		Var *distributionKey = BuildDistributionKeyFromColumnName(relation, distributionColumn);
+
+		Var *originalDistributionKey = DistPartitionKey(relationId);
+
+		if (equal(distributionKey, originalDistributionKey))
+		{
+			ereport(ERROR, (errmsg("table is already distributed by %s", distributionColumn)));
+		}
+	}
+
+	/* Second, check for no-op shard count UDF calls. */
+	if (!shardCountIsNull)
+	{
+		CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(relationId);
+		int originalShardCount = cacheEntry -> shardIntervalArrayLength;
+		if (originalShardCount == shardCount)
+		{
+			ereport(ERROR, (errmsg("shard count of the table is already %d", shardCount)));
+		}
+	}
+
+	/* Third, check for no-op colocate with UDF calls. */
+	if (colocateWith != NULL && strcmp(colocateWith, "default") != 0 && strcmp (colocateWith, "none") != 0)
+	{
+		List *colocatedTableList = ColocatedTableList(relationId);
+		Oid colocatedTableOid = InvalidOid;
+		text *colocateWithText = cstring_to_text(colocateWith);
+		Oid colocateWithTableOid = ResolveRelationId(colocateWithText, false);
+		foreach_oid(colocatedTableOid, colocatedTableList)
+		{
+			if (colocateWithTableOid == colocatedTableOid)
+			{
+				ereport(ERROR, (errmsg("table is already colocated with %s", colocateWith)));
+				break;
+			}
+		}
+	}
+
+
+	if (cascadeToColocated == true && distributionColumn != NULL)
+	{
+		ereport(ERROR, (errmsg("distribution_column changes cannot be cascaded to colocated tables")));
+	}
+	if (cascadeToColocated == true && shardCountIsNull && colocateWith == NULL)
+	{
+		ereport(ERROR, (errmsg("shard_count or colocate_with is necessary for cascading to colocated tables")));
+	}
+	if (cascadeToColocated == true && colocateWith != NULL && strcmp(colocateWith, "none") == 0)
+	{
+		ereport(ERROR, (errmsg("colocate_with := 'none' cannot be cascaded to colocated tables")));
+	}
+	List *colocatedTableList = ColocatedTableList(relationId);
+	int colocatedTableCount = list_length(colocatedTableList) - 1;
+	if (!shardCountIsNull && cascadeToColocatedIsNull && colocatedTableCount > 0)
+	{
+		ereport(ERROR, (errmsg("cascade_to_colocated parameter is necessary"),
+						errdetail("this table is colocated with some other tables"),
+						errhint("cascade_to_colocated := false will break the current colocation, "
+								"cascade_to_colocated := true will change the shard count of "
+								"colocated tables too.")));
+	}
 }
