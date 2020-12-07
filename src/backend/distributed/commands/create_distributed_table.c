@@ -92,11 +92,12 @@ int ReplicationModel = REPLICATION_MODEL_COORDINATOR;
 
 /* local function forward declarations */
 static char DecideReplicationModel(char distributionMethod, bool viaDeprecatedAPI);
-static void CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
-											 bool localTableEmpty);
+static void CreateHashDistributedTableShards(Oid relationId, int shardCount,
+											 Oid colocatedTableId, bool localTableEmpty);
 static uint32 ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 									  char distributionMethod, char replicationModel,
-									  char *colocateWithTableName, bool viaDeprecatedAPI);
+									  int shardCount, char *colocateWithTableName,
+									  bool viaDeprecatedAPI);
 static void EnsureRelationCanBeDistributed(Oid relationId, Var *distributionColumn,
 										   char distributionMethod, uint32 colocationId,
 										   char replicationModel, bool viaDeprecatedAPI);
@@ -176,7 +177,7 @@ master_create_distributed_table(PG_FUNCTION_ARGS)
 	char distributionMethod = LookupDistributionMethod(distributionMethodOid);
 
 	CreateDistributedTable(relationId, distributionColumn, distributionMethod,
-						   colocateWithTableName, viaDeprecatedAPI);
+						   ShardCount, colocateWithTableName, viaDeprecatedAPI);
 
 	relation_close(relation, NoLock);
 
@@ -225,7 +226,7 @@ create_distributed_table(PG_FUNCTION_ARGS)
 	char *colocateWithTableName = text_to_cstring(colocateWithTableNameText);
 
 	CreateDistributedTable(relationId, distributionColumn, distributionMethod,
-						   colocateWithTableName, viaDeprecatedAPI);
+						   ShardCount, colocateWithTableName, viaDeprecatedAPI);
 
 	relation_close(relation, NoLock);
 
@@ -273,7 +274,7 @@ create_reference_table(PG_FUNCTION_ARGS)
 	}
 
 	CreateDistributedTable(relationId, distributionColumn, DISTRIBUTE_BY_NONE,
-						   colocateWithTableName, viaDeprecatedAPI);
+						   ShardCount, colocateWithTableName, viaDeprecatedAPI);
 
 	relation_close(relation, NoLock);
 
@@ -353,7 +354,7 @@ EnsureRelationExists(Oid relationId)
  */
 void
 CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributionMethod,
-					   char *colocateWithTableName, bool viaDeprecatedAPI)
+					   int shardCount, char *colocateWithTableName, bool viaDeprecatedAPI)
 {
 	/*
 	 * distributed tables might have dependencies on different objects, since we create
@@ -374,7 +375,7 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	 */
 	uint32 colocationId = ColocationIdForNewTable(relationId, distributionColumn,
 												  distributionMethod, replicationModel,
-												  colocateWithTableName,
+												  shardCount, colocateWithTableName,
 												  viaDeprecatedAPI);
 
 	EnsureRelationCanBeDistributed(relationId, distributionColumn, distributionMethod,
@@ -413,7 +414,7 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	/* create shards for hash distributed and reference tables */
 	if (distributionMethod == DISTRIBUTE_BY_HASH)
 	{
-		CreateHashDistributedTableShards(relationId, colocatedTableId, localTableEmpty);
+		CreateHashDistributedTableShards(relationId, shardCount, colocatedTableId, localTableEmpty);
 	}
 	else if (distributionMethod == DISTRIBUTE_BY_NONE)
 	{
@@ -442,8 +443,8 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 		foreach_oid(partitionRelationId, partitionList)
 		{
 			CreateDistributedTable(partitionRelationId, distributionColumn,
-								   distributionMethod, colocateWithTableName,
-								   viaDeprecatedAPI);
+								   distributionMethod, shardCount,
+								   colocateWithTableName, viaDeprecatedAPI);
 		}
 	}
 
@@ -511,8 +512,8 @@ DecideReplicationModel(char distributionMethod, bool viaDeprecatedAPI)
  * CreateHashDistributedTableShards creates shards of given hash distributed table.
  */
 static void
-CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
-								 bool localTableEmpty)
+CreateHashDistributedTableShards(Oid relationId, int shardCount,
+								 Oid colocatedTableId, bool localTableEmpty)
 {
 	bool useExclusiveConnection = false;
 
@@ -537,10 +538,9 @@ CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
 		/*
 		 * This path is only reached by create_distributed_table for the distributed
 		 * tables which will not be part of an existing colocation group. Therefore,
-		 * we can directly use ShardCount and ShardReplicationFactor global variables
-		 * here.
+		 * we can directly use ShardReplicationFactor global variable here.
 		 */
-		CreateShardsWithRoundRobinPolicy(relationId, ShardCount, ShardReplicationFactor,
+		CreateShardsWithRoundRobinPolicy(relationId, shardCount, ShardReplicationFactor,
 										 useExclusiveConnection);
 	}
 }
@@ -560,7 +560,8 @@ CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
 static uint32
 ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 						char distributionMethod, char replicationModel,
-						char *colocateWithTableName, bool viaDeprecatedAPI)
+						int shardCount, char *colocateWithTableName,
+						bool viaDeprecatedAPI)
 {
 	uint32 colocationId = INVALID_COLOCATION_ID;
 
@@ -603,13 +604,13 @@ ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 		if (pg_strncasecmp(colocateWithTableName, "default", NAMEDATALEN) == 0)
 		{
 			/* check for default colocation group */
-			colocationId = ColocationId(ShardCount, ShardReplicationFactor,
+			colocationId = ColocationId(shardCount, ShardReplicationFactor,
 										distributionColumnType,
 										distributionColumnCollation);
 
 			if (colocationId == INVALID_COLOCATION_ID)
 			{
-				colocationId = CreateColocationGroup(ShardCount, ShardReplicationFactor,
+				colocationId = CreateColocationGroup(shardCount, ShardReplicationFactor,
 													 distributionColumnType,
 													 distributionColumnCollation);
 				createdColocationGroup = true;
