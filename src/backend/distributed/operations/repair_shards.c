@@ -981,7 +981,8 @@ RecreateTableDDLCommandList(Oid relationId)
 
 	List *dropCommandList = list_make1(makeTableDDLCommandString(dropCommand->data));
 	List *createCommandList = GetPreLoadTableCreationCommands(relationId,
-															  includeSequenceDefaults);
+															  includeSequenceDefaults,
+															  NULL);
 	List *recreateCommandList = list_concat(dropCommandList, createCommandList);
 
 	return recreateCommandList;

@@ -483,6 +483,7 @@ SELECT * FROM print_extension_changes();
                                               | function alter_columnar_table_reset(regclass,boolean,boolean,boolean,boolean)
                                               | function alter_columnar_table_set(regclass,integer,integer,name,integer)
                                               | function alter_distributed_table(regclass,text,integer,text,boolean)
+                                              | function alter_table_set_access_method(regclass,text)
                                               | function citus_internal.columnar_ensure_objects_exist()
                                               | function citus_total_relation_size(regclass,boolean)
                                               | function columnar.columnar_handler(internal)
@@ -492,7 +493,7 @@ SELECT * FROM print_extension_changes();
                                               | table columnar.columnar_stripes
                                               | table columnar.options
                                               | view citus_tables
-(14 rows)
+(15 rows)
 
 DROP TABLE prev_objects, extension_diff;
 -- show running version

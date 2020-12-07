@@ -480,6 +480,7 @@ SELECT * FROM print_extension_changes();
 ---------------------------------------------------------------------
  function citus_total_relation_size(regclass) |
                                               | function alter_distributed_table(regclass,text,integer,text,boolean)
+                                              | function alter_table_set_access_method(regclass,text)
                                               | function citus_internal.columnar_ensure_objects_exist()
                                               | function citus_total_relation_size(regclass,boolean)
                                               | schema columnar
@@ -488,7 +489,7 @@ SELECT * FROM print_extension_changes();
                                               | table columnar.columnar_stripes
                                               | table columnar.options
                                               | view citus_tables
-(10 rows)
+(11 rows)
 
 DROP TABLE prev_objects, extension_diff;
 -- show running version

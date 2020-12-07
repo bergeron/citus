@@ -7,6 +7,7 @@
 
 DROP VIEW public.citus_tables;
 DROP FUNCTION pg_catalog.alter_distributed_table(regclass, text, int, text, boolean);
+DROP FUNCTION pg_catalog.alter_table_set_access_method(regclass, text);
 DROP FUNCTION pg_catalog.citus_total_relation_size(regclass,boolean);
 
 #include "../udfs/citus_total_relation_size/7.0-1.sql"

@@ -89,6 +89,7 @@
 /* Table Conversion Types */
 #define UNDISTRIBUTE_TABLE 'u'
 #define ALTER_DISTRIBUTED_TABLE 'a'
+#define ALTER_TABLE_SET_ACCESS_METHOD 'm'
 
 /* Replication model to use when creating distributed tables */
 int ReplicationModel = REPLICATION_MODEL_COORDINATOR;
@@ -135,9 +136,10 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 										   EState *estate);
 static void UndistributeTable(Oid relationId);
 static void AlterDistributedTable(Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated);
+static void AlterTableSetAccessMethod(Oid relationId, char *accessMethod);
 static List * GetViewCreationCommandsOfTable(Oid relationId);
 static void ReplaceTable(Oid sourceId, Oid targetId);
-static void ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated);
+static void ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, char *accessMethod, bool cascadeToColocated);
 static void AlterDistributedTableMessages(Oid relationId, char *distributionColumn, bool shardCountIsNull, int shardCount, char *colocateWith, bool cascadeToColocatedIsNull, bool cascadeToColocated);
 
 /* exports for SQL callable functions */
@@ -146,6 +148,7 @@ PG_FUNCTION_INFO_V1(create_distributed_table);
 PG_FUNCTION_INFO_V1(create_reference_table);
 PG_FUNCTION_INFO_V1(undistribute_table);
 PG_FUNCTION_INFO_V1(alter_distributed_table);
+PG_FUNCTION_INFO_V1(alter_table_set_access_method);
 
 
 /*
@@ -363,6 +366,29 @@ alter_distributed_table(PG_FUNCTION_ARGS)
 	AlterDistributedTableMessages(relationId, distributionColumn, shardCountIsNull, shardCount, colocateWith, cascadeToColocatedIsNull, cascadeToColocated);
 
 	AlterDistributedTable(relationId, distributionColumn, shardCount, colocateWith, cascadeToColocated);
+
+	PG_RETURN_VOID();
+}
+
+
+/*
+ * alter_table_set_access_method gets a distributed table and an access
+ * method and changes table's access method into that.
+ */
+Datum
+alter_table_set_access_method(PG_FUNCTION_ARGS)
+{
+	Oid relationId = PG_GETARG_OID(0);
+	
+	text *accessMethodText = PG_GETARG_TEXT_P(1);
+	char *accessMethod = text_to_cstring(accessMethodText);
+
+	CheckCitusVersion(ERROR);
+	EnsureCoordinator();
+	EnsureRelationExists(relationId);
+	EnsureTableOwner(relationId);
+
+	AlterTableSetAccessMethod(relationId, accessMethod);
 
 	PG_RETURN_VOID();
 }
@@ -1680,7 +1706,7 @@ DistributionColumnUsesGeneratedStoredColumn(TupleDesc relationDesc,
  * be dropped.
  */
 void
-ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, bool cascadeToColocated)
+ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int shardCount, char *colocateWith, char *accessMethod, bool cascadeToColocated)
 {
 	List *colocatedTableList = NIL;
 	if (cascadeToColocated)
@@ -1695,7 +1721,7 @@ ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int 
 		shardCount = cacheEntry -> shardIntervalArrayLength;
 		shardCountIsNull = true;
 	}
-	List *preLoadCommands = GetPreLoadTableCreationCommands(relationId, true);
+	List *preLoadCommands = GetPreLoadTableCreationCommands(relationId, true, accessMethod);
 	List *postLoadCommands = GetPostLoadTableCreationCommands(relationId);
 
 	postLoadCommands = list_concat(postLoadCommands,
@@ -1709,6 +1735,21 @@ ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int 
 	if (spiResult != SPI_OK_CONNECT)
 	{
 		ereport(ERROR, (errmsg("could not connect to SPI manager")));
+	}
+
+	bool isPartitionTable = false;
+	char *attachToParentCommand = NULL;
+	if (PartitionTable(relationId))
+	{
+		isPartitionTable = true;
+		char *detachFromParentCommand = GenerateDetachPartitionCommand(relationId);
+		attachToParentCommand = GenerateAlterTableAttachPartitionCommand(relationId);
+
+		spiResult = SPI_execute(detachFromParentCommand, false, 0);
+		if (spiResult != SPI_OK_UTILITY)
+		{
+			ereport(ERROR, (errmsg("could not run SPI query")));
+		}
 	}
 
 	if (PartitionedTable(relationId))
@@ -1767,7 +1808,7 @@ ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int 
 							NULL, None_Receiver, NULL);
 	}
 
-	if (conversionType == ALTER_DISTRIBUTED_TABLE)
+	if (conversionType == ALTER_DISTRIBUTED_TABLE || (conversionType == ALTER_TABLE_SET_ACCESS_METHOD && IsCitusTableType(relationId, DISTRIBUTED_TABLE)))
 	{
 		Var *distributionKey = NULL;
 
@@ -1800,6 +1841,17 @@ ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int 
 		char partitionMethod = PartitionMethod(relationId);
 		CreateDistributedTable(get_relname_relid(tempName, schemaId), distributionKey, partitionMethod, shardCount, colocateWith, false);
 	}
+	else if (conversionType == ALTER_TABLE_SET_ACCESS_METHOD)
+	{
+		if (IsCitusTableType(relationId, REFERENCE_TABLE))
+		{
+			CreateDistributedTable(get_relname_relid(tempName, schemaId), NULL, DISTRIBUTE_BY_NONE, ShardCount, NULL, false);
+		}
+		else if (IsCitusTableType(relationId, CITUS_LOCAL_TABLE))
+		{
+			CreateCitusLocalTable(get_relname_relid(tempName, schemaId));
+		}
+	}
 
 	ReplaceTable(relationId, get_relname_relid(tempName, schemaId));
 
@@ -1809,6 +1861,15 @@ ConvertTable(char conversionType, Oid relationId, char *distributionColumn, int 
 		Assert(CitusIsA(tableConstructionCommand, TableDDLCommand));
 		char *tableConstructionSQL = GetTableDDLCommand(tableConstructionCommand);
 		spiResult = SPI_execute(tableConstructionSQL, false, 0);
+		if (spiResult != SPI_OK_UTILITY)
+		{
+			ereport(ERROR, (errmsg("could not run SPI query")));
+		}
+	}
+
+	if (isPartitionTable)
+	{
+		spiResult = SPI_execute(attachToParentCommand, false, 0);
 		if (spiResult != SPI_OK_UTILITY)
 		{
 			ereport(ERROR, (errmsg("could not run SPI query")));
@@ -1873,7 +1934,7 @@ UndistributeTable(Oid relationId)
 	EnsureTableNotForeign(relationId);
 	EnsureTableNotPartition(relationId);
 
-	ConvertTable(UNDISTRIBUTE_TABLE, relationId, NULL, 0, NULL, false);
+	ConvertTable(UNDISTRIBUTE_TABLE, relationId, NULL, 0, NULL, NULL, false);
 }
 
 
@@ -1926,6 +1987,34 @@ AlterDistributedTable(Oid relationId, char *distributionColumn, int shardCount, 
 	}
 
 	ConvertTable(ALTER_DISTRIBUTED_TABLE, relationId, distributionColumn, shardCount, colocateWith, NULL, cascadeToColocated);
+}
+
+
+/*
+ * AlterTableSetAccessMethod changes the access method of the given table. It uses
+ * ConvertTable function to create a new table with the access method and move everything
+ * to that table.
+ *
+ * The local and references tables, tables with references, partition tables and foreign
+ * tables are not supported. The function gives errors in these cases.
+ */
+void
+AlterTableSetAccessMethod(Oid relationId, char *accessMethod)
+{
+	Relation relation = try_relation_open(relationId, ExclusiveLock);
+
+	if (relation == NULL)
+	{
+		ereport(ERROR, (errmsg("cannot undistribute table "
+							   "because no such distributed table exists")));
+	}
+	relation_close(relation, NoLock);
+
+	EnsureTableNotReferencing(relationId);
+	EnsureTableNotReferenced(relationId);
+	EnsureTableNotForeign(relationId);
+
+	ConvertTable(ALTER_TABLE_SET_ACCESS_METHOD, relationId, NULL, 0, NULL, accessMethod, false);
 }
 
 

@@ -38,7 +38,6 @@
 #include "utils/syscache.h"
 
 
-static void CreateCitusLocalTable(Oid relationId);
 static void ErrorIfUnsupportedCreateCitusLocalTable(Relation relation);
 static void ErrorIfUnsupportedCitusLocalTableKind(Oid relationId);
 static List * GetShellTableDDLEventsForCitusLocalTable(Oid relationId);
@@ -100,7 +99,7 @@ create_citus_local_table(PG_FUNCTION_ARGS)
  * Similar to reference tables, it has only 1 placement. In addition to that, that
  * single placement is only allowed to be on the coordinator.
  */
-static void
+void
 CreateCitusLocalTable(Oid relationId)
 {
 	/*

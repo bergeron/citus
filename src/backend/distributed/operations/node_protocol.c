@@ -540,7 +540,7 @@ GetFullTableCreationCommands(Oid relationId, bool includeSequenceDefaults)
 	List *tableDDLEventList = NIL;
 
 	List *preLoadCreationCommandList =
-		GetPreLoadTableCreationCommands(relationId, includeSequenceDefaults);
+		GetPreLoadTableCreationCommands(relationId, includeSequenceDefaults, NULL);
 
 	tableDDLEventList = list_concat(tableDDLEventList, preLoadCreationCommandList);
 
@@ -616,7 +616,7 @@ GetTableReplicaIdentityCommand(Oid relationId)
  * to facilitate faster data load.
  */
 List *
-GetPreLoadTableCreationCommands(Oid relationId, bool includeSequenceDefaults)
+GetPreLoadTableCreationCommands(Oid relationId, bool includeSequenceDefaults, char *accessMethod)
 {
 	List *tableDDLEventList = NIL;
 
@@ -640,7 +640,8 @@ GetPreLoadTableCreationCommands(Oid relationId, bool includeSequenceDefaults)
 
 	/* fetch table schema and column option definitions */
 	char *tableSchemaDef = pg_get_tableschemadef_string(relationId,
-														includeSequenceDefaults);
+														includeSequenceDefaults,
+														accessMethod);
 	char *tableColumnOptionsDef = pg_get_tablecolumnoptionsdef_string(relationId);
 
 	tableDDLEventList = lappend(tableDDLEventList, makeTableDDLCommandString(
