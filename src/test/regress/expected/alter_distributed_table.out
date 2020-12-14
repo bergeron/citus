@@ -1,0 +1,262 @@
+CREATE SCHEMA alter_distributed_table;
+SET search_path TO alter_distributed_table;
+SET citus.shard_count TO 4;
+CREATE TABLE dist_table (a INT, b INT);
+SELECT create_distributed_table ('dist_table', 'a', colocate_with := 'none');
+ create_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+INSERT INTO dist_table VALUES (1, 1), (2, 2), (3, 3);
+CREATE TABLE colocation_table (a INT, b INT);
+SELECT create_distributed_table ('colocation_table', 'a', colocate_with := 'none');
+ create_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+CREATE TABLE colocation_table_2 (a INT, b INT);
+SELECT create_distributed_table ('colocation_table_2', 'a', colocate_with := 'none');
+ create_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           4
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | a                   |           4
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+ Colocation Groups
+---------------------------------------------------------------------
+ colocation_table
+ colocation_table_2
+ dist_table
+(3 rows)
+
+-- test altering distribution column
+SELECT alter_distributed_table('dist_table', distribution_column := 'b');
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           4
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | b                   |           4
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+ Colocation Groups
+---------------------------------------------------------------------
+ colocation_table
+ colocation_table_2
+ dist_table
+(3 rows)
+
+-- test altering shard count
+SELECT alter_distributed_table('dist_table', shard_count := 6);
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           4
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | b                   |           6
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+ Colocation Groups
+---------------------------------------------------------------------
+ colocation_table
+ colocation_table_2
+ dist_table
+(3 rows)
+
+-- test altering colocation, note that shard count will also change
+SELECT alter_distributed_table('dist_table', colocate_with := 'alter_distributed_table.colocation_table');
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           4
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | b                   |           4
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+      Colocation Groups
+---------------------------------------------------------------------
+ colocation_table, dist_table
+ colocation_table_2
+(2 rows)
+
+-- test altering shard count with cascading, note that the colocation will be kept
+SELECT alter_distributed_table('dist_table', shard_count := 8, cascade_to_colocated := true);
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+NOTICE:  creating a new table for alter_distributed_table.colocation_table
+NOTICE:  Moving the data of alter_distributed_table.colocation_table
+NOTICE:  Dropping the old alter_distributed_table.colocation_table
+NOTICE:  Renaming the new table to alter_distributed_table.colocation_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           8
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | b                   |           8
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+      Colocation Groups
+---------------------------------------------------------------------
+ colocation_table, dist_table
+ colocation_table_2
+(2 rows)
+
+-- test altering shard count without cascading, note that the colocation will be broken
+SELECT alter_distributed_table('dist_table', shard_count := 10, cascade_to_colocated := false);
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT "Name", "Citus Table Type", "Distribution Column", "Shard Count" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2');
+        Name        | Citus Table Type | Distribution Column | Shard Count
+---------------------------------------------------------------------
+ colocation_table   | distributed      | a                   |           8
+ colocation_table_2 | distributed      | a                   |           4
+ dist_table         | distributed      | b                   |          10
+(3 rows)
+
+SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM public.citus_tables
+    WHERE "Name" IN ('dist_table', 'colocation_table', 'colocation_table_2') GROUP BY "Colocation ID" ORDER BY 1;
+ Colocation Groups
+---------------------------------------------------------------------
+ colocation_table
+ colocation_table_2
+ dist_table
+(3 rows)
+
+-- test error messages
+-- test nothing to change
+SELECT alter_distributed_table('dist_table');
+ERROR:  you have to specify something to alter on table
+DETAIL:  give at least one of the distribution_column, shard_count or colocate_with parameters
+SELECT alter_distributed_table('dist_table', cascade_to_colocated := false);
+ERROR:  you have to specify something to alter on table
+DETAIL:  give at least one of the distribution_column, shard_count or colocate_with parameters
+-- no operation UDF calls
+SELECT alter_distributed_table('dist_table', distribution_column := 'b');
+ERROR:  table is already distributed by b
+SELECT alter_distributed_table('dist_table', shard_count := 10);
+ERROR:  shard count of the table is already 10
+-- first colocate the tables, then try to re-colococate
+SELECT alter_distributed_table('dist_table', colocate_with := 'colocation_table');
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT alter_distributed_table('dist_table', colocate_with := 'colocation_table');
+ERROR:  table is already colocated with colocation_table
+-- test cascading distribution column, should error
+SELECT alter_distributed_table('dist_table', distribution_column := 'a', cascade_to_colocated := true);
+ERROR:  distribution_column changes cannot be cascaded to colocated tables
+SELECT alter_distributed_table('dist_table', distribution_column := 'a', shard_count:=12, colocate_with:='colocation_table_2', cascade_to_colocated := true);
+ERROR:  distribution_column changes cannot be cascaded to colocated tables
+-- test nothing to cascade
+SELECT alter_distributed_table('dist_table', cascade_to_colocated := true);
+ERROR:  shard_count or colocate_with is necessary for cascading to colocated tables
+-- test cascading colocate_with := 'none'
+SELECT alter_distributed_table('dist_table', colocate_with := 'none', cascade_to_colocated := true);
+ERROR:  colocate_with := 'none' cannot be cascaded to colocated tables
+-- test changing shard count of a colocated table without cascade_to_colocated, should error
+SELECT alter_distributed_table('dist_table', shard_count := 14);
+ERROR:  cascade_to_colocated parameter is necessary
+DETAIL:  this table is colocated with some other tables
+HINT:  cascade_to_colocated := false will break the current colocation, cascade_to_colocated := true will change the shard count of colocated tables too.
+-- test changing shard count of a non-colocated table without cascade_to_colocated, shouldn't error
+SELECT alter_distributed_table('dist_table', colocate_with := 'none');
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT alter_distributed_table('dist_table', shard_count := 14);
+NOTICE:  creating a new table for alter_distributed_table.dist_table
+NOTICE:  Moving the data of alter_distributed_table.dist_table
+NOTICE:  Dropping the old alter_distributed_table.dist_table
+NOTICE:  Renaming the new table to alter_distributed_table.dist_table
+ alter_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+-- test altering a table into colocating with a table but giving a different shard count
+SELECT alter_distributed_table('dist_table', colocate_with := 'colocation_table', shard_count := 16);
+ERROR:  shard_count cannot be different than the shard count of the table in colocate_with
+HINT:  if no shard_count is specified shard count will be same with colocate_with table's
+DROP SCHEMA alter_distributed_table CASCADE;
+NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to table colocation_table_2
+drop cascades to table colocation_table
+drop cascades to table dist_table
