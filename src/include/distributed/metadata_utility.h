@@ -157,6 +157,7 @@ extern void EnsureSuperUser(void);
 extern void ErrorIfTableIsACatalogTable(Relation relation);
 extern void EnsureTableNotDistributed(Oid relationId);
 extern void EnsureReplicationSettings(Oid relationId, char replicationModel);
+extern void EnsureRelationExists(Oid relationId);
 extern bool RegularTable(Oid relationId);
 extern char * ConstructQualifiedShardName(ShardInterval *shardInterval);
 extern uint64 GetFirstShardId(Oid relationId);

@@ -191,11 +191,9 @@ SELECT STRING_AGG("Name"::text, ', ' ORDER BY 1) AS "Colocation Groups" FROM pub
 -- test error messages
 -- test nothing to change
 SELECT alter_distributed_table('dist_table');
-ERROR:  you have to specify something to alter on table
-DETAIL:  give at least one of the distribution_column, shard_count or colocate_with parameters
+ERROR:  you have to specify at least one of the distribution_column, shard_count or colocate_with parameters
 SELECT alter_distributed_table('dist_table', cascade_to_colocated := false);
-ERROR:  you have to specify something to alter on table
-DETAIL:  give at least one of the distribution_column, shard_count or colocate_with parameters
+ERROR:  you have to specify at least one of the distribution_column, shard_count or colocate_with parameters
 -- no operation UDF calls
 SELECT alter_distributed_table('dist_table', distribution_column := 'b');
 ERROR:  table is already distributed by b
