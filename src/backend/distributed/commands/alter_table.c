@@ -177,9 +177,13 @@ alter_table_set_access_method(PG_FUNCTION_ARGS)
 	char *accessMethod = text_to_cstring(accessMethodText);
 
 	CheckCitusVersion(ERROR);
-	EnsureCoordinator();
 	EnsureRelationExists(relationId);
 	EnsureTableOwner(relationId);
+
+	if (IsCitusTable(relationId))
+	{
+		EnsureCoordinator();
+	}
 
 	AlterTableSetAccessMethod(relationId, accessMethod);
 
@@ -353,7 +357,7 @@ ConvertTable(TableConversionConfiguration config)
 	}
 
 	bool shardCountIsNull = false;
-	if (config.shardCount == 0)
+	if (config.shardCount == 0 && IsCitusTableType(config.relationId, DISTRIBUTED_TABLE))
 	{
 		CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(config.relationId);
 		config.shardCount = cacheEntry -> shardIntervalArrayLength;
