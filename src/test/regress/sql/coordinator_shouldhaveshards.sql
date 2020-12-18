@@ -214,6 +214,20 @@ INSERT INTO ref_table SELECT *, * FROM generate_series(1, 100);
 SELECT COUNT(*) FROM test JOIN ref_table USING(x);
 ROLLBACK;
 
+-- issue #4237
+CREATE TABLE test_append_table(a int);
+SELECT create_distributed_table('test_append_table', 'a', 'append');
+-- this will fail since it will try to create an empty placement in the
+-- coordinator as well
+SET citus.shard_replication_factor TO 3;
+SELECT master_create_empty_shard('test_append_table');
+-- this will create an empty shard with replicas in the two worker nodes
+SET citus.shard_replication_factor TO 2;
+SELECT master_create_empty_shard('test_append_table');
+-- verify groupid is not 0 for each placement
+SELECT COUNT(*) FROM pg_dist_placement WHERE shardid = 1503037 AND groupid > 0;
+SET citus.shard_replication_factor TO 1;
+
 \set VERBOSITY terse
 DROP TABLE ref_table;
 
@@ -221,6 +235,7 @@ DELETE FROM test;
 DROP TABLE test;
 DROP TABLE dist_table;
 DROP TABLE ref;
+DROP TABLE test_append_table;
 
 DROP SCHEMA coordinator_shouldhaveshards CASCADE;
 
