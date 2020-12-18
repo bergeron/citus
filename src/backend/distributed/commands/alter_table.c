@@ -79,6 +79,8 @@ static void EnsureTableNotReferencing(Oid relationId);
 static void EnsureTableNotReferenced(Oid relationId);
 static void EnsureTableNotForeign(Oid relationId);
 static void EnsureTableNotPartition(Oid relationId);
+static void CreateDistributedTableLike(Oid relationId, Oid likeRelationId, char *distributionColumn, int shardCount, bool shardCountIsNull, char * colocateWith);
+static void CreateCitusTableLike(Oid relationId, Oid likeRelationId, int shardCount);
 static List * GetViewCreationCommandsOfTable(Oid relationId);
 static void ReplaceTable(Oid sourceId, Oid targetId);
 static void AlterDistributedTableMessages(Oid relationId, char *distributionColumn, bool shardCountIsNull, int shardCount, char *colocateWith, bool cascadeToColocatedIsNull, bool cascadeToColocated);
@@ -342,7 +344,7 @@ AlterTableSetAccessMethod(Oid relationId, char *accessMethod)
  * be dropped.
  */
 void
-ConvertTable(TableConversionConfiguration config);
+ConvertTable(TableConversionConfiguration config)
 {
 	List *colocatedTableList = NIL;
 	if (config.cascadeToColocated)
@@ -444,47 +446,13 @@ ConvertTable(TableConversionConfiguration config);
 							NULL, None_Receiver, NULL);
 	}
 
-	if (config.conversionType == ALTER_DISTRIBUTED_TABLE || (config.conversionType == ALTER_TABLE_SET_ACCESS_METHOD && IsCitusTableType(config.relationId, DISTRIBUTED_TABLE)))
+	if (config.conversionType == ALTER_DISTRIBUTED_TABLE)
 	{
-		Var *distributionKey = NULL;
-
-		if (config.distributionColumn)
-		{
-			Relation relation = try_relation_open(config.relationId, ExclusiveLock);
-			relation_close(relation, NoLock);
-			distributionKey = BuildDistributionKeyFromColumnName(relation,
-																 config.distributionColumn);
-		}
-		else
-		{
-			distributionKey = DistPartitionKey(config.relationId);
-		}
-
-		if (config.colocateWith == NULL)
-		{
-			Var *originalDistributionKey = DistPartitionKey(config.relationId);
-			if ((config.distributionColumn == NULL || originalDistributionKey->vartype == distributionKey->vartype) && shardCountIsNull)
-			{
-				config.colocateWith = quote_qualified_identifier(schemaName, relationName);
-			}
-			else
-			{
-				config.colocateWith = "default";
-			}
-		}
-		char partitionMethod = PartitionMethod(config.relationId);
-		CreateDistributedTable(get_relname_relid(tempName, schemaId), distributionKey, partitionMethod, config.shardCount, config.colocateWith, false);
+		CreateDistributedTableLike(get_relname_relid(tempName, schemaId), config.relationId, config.distributionColumn, config.shardCount, shardCountIsNull, config.colocateWith);
 	}
 	else if (config.conversionType == ALTER_TABLE_SET_ACCESS_METHOD)
 	{
-		if (IsCitusTableType(config.relationId, REFERENCE_TABLE))
-		{
-			CreateDistributedTable(get_relname_relid(tempName, schemaId), NULL, DISTRIBUTE_BY_NONE, ShardCount, NULL, false);
-		}
-		else if (IsCitusTableType(config.relationId, CITUS_LOCAL_TABLE))
-		{
-			CreateCitusLocalTable(get_relname_relid(tempName, schemaId));
-		}
+		CreateCitusTableLike(get_relname_relid(tempName, schemaId), config.relationId, config.shardCount);
 	}
 
 	ReplaceTable(config.relationId, get_relname_relid(tempName, schemaId));
@@ -595,6 +563,61 @@ void EnsureTableNotPartition(Oid relationId)
 							   "because table is a partition"),
 						errhint("the parent table is \"%s\"",
 								parentRelationName)));
+	}
+}
+
+
+void
+CreateDistributedTableLike(Oid relationId, Oid likeRelationId, char *distributionColumn, int shardCount, bool shardCountIsNull, char * colocateWith)
+{
+	Var *distributionKey = NULL;
+
+	if (distributionColumn)
+	{
+		Relation likeRelation = try_relation_open(likeRelationId, ExclusiveLock);
+		relation_close(likeRelation, NoLock);
+		distributionKey = BuildDistributionKeyFromColumnName(likeRelation,
+															 distributionColumn);
+	}
+	else
+	{
+		distributionKey = DistPartitionKey(likeRelationId);
+	}
+
+	if (colocateWith == NULL)
+	{
+		Var *originalDistributionKey = DistPartitionKey(likeRelationId);
+		if ((distributionColumn == NULL || originalDistributionKey->vartype == distributionKey->vartype) && shardCountIsNull)
+		{
+			char *likeRelationName = get_rel_name(likeRelationId);
+			Oid schemaId = get_rel_namespace(likeRelationId);
+			char *schemaName = get_namespace_name(schemaId);
+			colocateWith = quote_qualified_identifier(schemaName, likeRelationName);
+		}
+		else
+		{
+			colocateWith = "default";
+		}
+	}
+	char partitionMethod = PartitionMethod(likeRelationId);
+	CreateDistributedTable(relationId, distributionKey, partitionMethod, shardCount, colocateWith, false);
+}
+
+
+void
+CreateCitusTableLike(Oid relationId, Oid likeRelationId, int shardCount)
+{
+	if (IsCitusTableType(likeRelationId, DISTRIBUTED_TABLE))
+	{
+		CreateDistributedTableLike(relationId, likeRelationId, NULL, shardCount, true, NULL);
+	}
+	else if (IsCitusTableType(likeRelationId, REFERENCE_TABLE))
+	{
+		CreateDistributedTable(relationId, NULL, DISTRIBUTE_BY_NONE, ShardCount, NULL, false);
+	}
+	else if (IsCitusTableType(likeRelationId, CITUS_LOCAL_TABLE))
+	{
+		CreateCitusLocalTable(relationId);
 	}
 }
 
