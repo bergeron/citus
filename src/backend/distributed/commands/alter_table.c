@@ -82,7 +82,7 @@ static void EnsureTableNotPartition(Oid relationId);
 static void CreateDistributedTableLike(Oid relationId, Oid likeRelationId, char *distributionColumn, int shardCount, bool shardCountIsNull, char * colocateWith);
 static void CreateCitusTableLike(Oid relationId, Oid likeRelationId, int shardCount);
 static List * GetViewCreationCommandsOfTable(Oid relationId);
-static void ReplaceTable(Oid sourceId, Oid targetId);
+static void ReplaceTable(Oid sourceId, Oid targetId, List *justBeforeDropCommands);
 static void AlterDistributedTableMessages(Oid relationId, char *distributionColumn, bool shardCountIsNull, int shardCount, char *colocateWith, bool cascadeToColocatedIsNull, bool cascadeToColocated);
 
 PG_FUNCTION_INFO_V1(undistribute_table);
@@ -361,6 +361,7 @@ ConvertTable(TableConversionConfiguration config)
 	}
 	List *preLoadCommands = GetPreLoadTableCreationCommands(config.relationId, true, config.accessMethod);
 	List *postLoadCommands = GetPostLoadTableCreationCommands(config.relationId);
+	List *justBeforeDropCommands = NIL;
 
 	postLoadCommands = list_concat(postLoadCommands,
 								   GetViewCreationCommandsOfTable(config.relationId));
@@ -383,11 +384,8 @@ ConvertTable(TableConversionConfiguration config)
 		char *detachFromParentCommand = GenerateDetachPartitionCommand(config.relationId);
 		attachToParentCommand = GenerateAlterTableAttachPartitionCommand(config.relationId);
 
-		spiResult = SPI_execute(detachFromParentCommand, false, 0);
-		if (spiResult != SPI_OK_UTILITY)
-		{
-			ereport(ERROR, (errmsg("could not run SPI query")));
-		}
+
+		justBeforeDropCommands = lappend(justBeforeDropCommands, detachFromParentCommand);
 	}
 
 	if (PartitionedTable(config.relationId))
@@ -455,7 +453,7 @@ ConvertTable(TableConversionConfiguration config)
 		CreateCitusTableLike(get_relname_relid(tempName, schemaId), config.relationId, config.shardCount);
 	}
 
-	ReplaceTable(config.relationId, get_relname_relid(tempName, schemaId));
+	ReplaceTable(config.relationId, get_relname_relid(tempName, schemaId), justBeforeDropCommands);
 
 	TableDDLCommand *tableConstructionCommand = NULL;
 	foreach_ptr(tableConstructionCommand, postLoadCommands)
@@ -662,7 +660,7 @@ GetViewCreationCommandsOfTable(Oid relationId)
  * Source and target tables need to be in the same schema and have the same columns.
  */
 void
-ReplaceTable(Oid sourceId, Oid targetId)
+ReplaceTable(Oid sourceId, Oid targetId, List * justBeforeDropCommands)
 {
 	char *sourceName = get_rel_name(sourceId);
 	char *targetName = get_rel_name(targetId);
@@ -693,6 +691,16 @@ ReplaceTable(Oid sourceId, Oid targetId)
 	{
 		changeDependencyFor(RelationRelationId, sequenceOid,
 							RelationRelationId, sourceId, targetId);
+	}
+
+	char *justBeforeDropCommand = NULL;
+	foreach_ptr(justBeforeDropCommand, justBeforeDropCommands)
+	{
+		spiResult = SPI_execute(justBeforeDropCommand, false, 0);
+		if (spiResult != SPI_OK_UTILITY)
+		{
+			ereport(ERROR, (errmsg("could not run SPI query")));
+		}
 	}
 
 	ereport(NOTICE, (errmsg("Dropping the old %s",
