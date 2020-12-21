@@ -325,8 +325,24 @@ AlterDistributedTable(TableConversion * con)
 		/*shardCount is either 0 or already same with colocateWith table's*/
 		con->shardCount = colocateWithTableShardCount;
 		con->shardCountIsNull = false;
-	}
 
+		Var * colocateWithPartKey = DistPartitionKey(colocateWithTableOid);
+
+		if (con->distributionColumn && colocateWithPartKey->vartype != con->distributionKey->vartype)
+		{
+			ereport(ERROR, (errmsg("cannot colocate with %s and change distribution "
+								   "column to %s because data type of column %s is "
+								   "different then the distribution column of the %s",
+								   con->colocateWith, con->distributionColumn,
+								   con->distributionColumn, con->colocateWith)));
+		}
+		else if(!con->distributionColumn && colocateWithPartKey->vartype != con->originalDistributionKey->vartype)
+		{
+			ereport(ERROR, (errmsg("cannot colocate with %s because data type of its "
+								   "distribution column is different than %s",
+								   con->colocateWith, con->relationName)));
+		}
+	}
 	ConvertTable(con);
 }
 

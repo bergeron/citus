@@ -253,8 +253,21 @@ NOTICE:  Renaming the new table to alter_distributed_table.dist_table
 SELECT alter_distributed_table('dist_table', colocate_with := 'colocation_table', shard_count := 16);
 ERROR:  shard_count cannot be different than the shard count of the table in colocate_with
 HINT:  if no shard_count is specified shard count will be same with colocate_with table's
+-- test colocation with distribution columns with different data types
+CREATE TABLE different_type_table (a TEXT);
+SELECT create_distributed_table('different_type_table', 'a');
+ create_distributed_table
+---------------------------------------------------------------------
+
+(1 row)
+
+SELECT alter_distributed_table('dist_table', colocate_with := 'different_type_table');
+ERROR:  cannot colocate with different_type_table because data type of its distribution column is different than dist_table
+SELECT alter_distributed_table('dist_table', distribution_column := 'a', colocate_with := 'different_type_table');
+ERROR:  cannot colocate with different_type_table and change distribution column to a because data type of column a is different then the distribution column of the different_type_table
 DROP SCHEMA alter_distributed_table CASCADE;
-NOTICE:  drop cascades to 3 other objects
+NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to table colocation_table_2
 drop cascades to table colocation_table
 drop cascades to table dist_table
+drop cascades to table different_type_table

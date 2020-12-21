@@ -86,4 +86,11 @@ SELECT alter_distributed_table('dist_table', shard_count := 14);
 -- test altering a table into colocating with a table but giving a different shard count
 SELECT alter_distributed_table('dist_table', colocate_with := 'colocation_table', shard_count := 16);
 
+-- test colocation with distribution columns with different data types
+CREATE TABLE different_type_table (a TEXT);
+SELECT create_distributed_table('different_type_table', 'a');
+
+SELECT alter_distributed_table('dist_table', colocate_with := 'different_type_table');
+SELECT alter_distributed_table('dist_table', distribution_column := 'a', colocate_with := 'different_type_table');
+
 DROP SCHEMA alter_distributed_table CASCADE;
