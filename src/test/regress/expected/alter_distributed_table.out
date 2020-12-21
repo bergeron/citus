@@ -265,6 +265,10 @@ SELECT alter_distributed_table('dist_table', colocate_with := 'different_type_ta
 ERROR:  cannot colocate with different_type_table because data type of its distribution column is different than dist_table
 SELECT alter_distributed_table('dist_table', distribution_column := 'a', colocate_with := 'different_type_table');
 ERROR:  cannot colocate with different_type_table and change distribution column to a because data type of column a is different then the distribution column of the different_type_table
+-- test shard_count := 0
+SELECT alter_distributed_table('dist_table', shard_count := 0);
+ERROR:  shard_count cannot be 0
+HINT:  if you no longer want this to be a distributed table you can try undistribute_table() function
 DROP SCHEMA alter_distributed_table CASCADE;
 NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to table colocation_table_2

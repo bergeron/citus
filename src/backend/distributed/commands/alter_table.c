@@ -303,15 +303,15 @@ AlterDistributedTable(TableConversion *con)
 
 	if (relation == NULL)
 	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because no such distributed table exists")));
+		ereport(ERROR, (errmsg("cannot alter table because no such "
+							   "distributed table exists")));
 	}
 	relation_close(relation, NoLock);
 
 	if (!IsCitusTableType(con->relationId, DISTRIBUTED_TABLE))
 	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because the table is not distributed")));
+		ereport(ERROR, (errmsg("cannot alter table because the table "
+							   "is not distributed")));
 	}
 
 	EnsureTableNotReferencing(con->relationId);
@@ -378,14 +378,19 @@ AlterTableSetAccessMethod(TableConversion *con)
 
 	if (relation == NULL)
 	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because no such distributed table exists")));
+		ereport(ERROR, (errmsg("cannot alter table because no such "
+							   "distributed table exists")));
 	}
 	relation_close(relation, NoLock);
 
 	EnsureTableNotReferencing(con->relationId);
 	EnsureTableNotReferenced(con->relationId);
 	EnsureTableNotForeign(con->relationId);
+
+	if (PartitionedTable(con->relationId))
+	{
+		ereport(ERROR, (errmsg("you cannot alter access method of a partitioned table")));
+	}
 
 	ConvertTable(con);
 }
@@ -545,14 +550,13 @@ ConvertTable(TableConversion *con)
 			{
 				continue;
 			}
-			StringInfo qualifiedRelationName = makeStringInfo();
-			appendStringInfo(qualifiedRelationName, "%s.%s", con->schemaName,
-							 con->relationName);
+			char *qualifiedRelationName = quote_qualified_identifier(con->schemaName,
+																	 con->relationName);
 
 			TableConversion *cascadeConfig =
 				CreateTableConversion(con->conversionType, colocatedTableId, NULL,
 									  con->shardCountIsNull, con->shardCount,
-									  qualifiedRelationName->data, NULL, false, false);
+									  qualifiedRelationName, NULL, false, false);
 			con->function(cascadeConfig);
 		}
 	}
@@ -719,7 +723,7 @@ CreateCitusTableLike(TableConversion *con)
 	}
 	else if (IsCitusTableType(con->relationId, REFERENCE_TABLE))
 	{
-		CreateDistributedTable(con->newRelationId, NULL, DISTRIBUTE_BY_NONE, ShardCount,
+		CreateDistributedTable(con->newRelationId, NULL, DISTRIBUTE_BY_NONE, 0,
 							   NULL, false);
 	}
 	else if (IsCitusTableType(con->relationId, CITUS_LOCAL_TABLE))
@@ -890,6 +894,14 @@ AlterDistributedTableMessages(TableConversion *con)
 		}
 	}
 
+	/* shard_count:=0 is not allowed */
+	if (!con->shardCountIsNull && con->shardCount == 0)
+	{
+		ereport(ERROR, (errmsg("shard_count cannot be 0"),
+						errhint("if you no longer want this to be a "
+								"distributed table you can try "
+								"undistribute_table() function")));
+	}
 
 	if (con->cascadeToColocated == true && con->distributionColumn != NULL)
 	{

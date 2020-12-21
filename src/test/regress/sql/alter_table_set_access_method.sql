@@ -35,6 +35,8 @@ SELECT * FROM partitioned_table ORDER BY 1, 2;
 SELECT * FROM partitioned_table_1_5 ORDER BY 1, 2;
 SELECT * FROM partitioned_table_6_10 ORDER BY 1, 2;
 
+-- altering partitioned tables' access methods is not supported
+SELECT alter_table_set_access_method('partitioned_table', 'columnar');
 -- test altering the partition's access method
 SELECT alter_table_set_access_method('partitioned_table_1_5', 'columnar');
 

@@ -93,4 +93,7 @@ SELECT create_distributed_table('different_type_table', 'a');
 SELECT alter_distributed_table('dist_table', colocate_with := 'different_type_table');
 SELECT alter_distributed_table('dist_table', distribution_column := 'a', colocate_with := 'different_type_table');
 
+-- test shard_count := 0
+SELECT alter_distributed_table('dist_table', shard_count := 0);
+
 DROP SCHEMA alter_distributed_table CASCADE;

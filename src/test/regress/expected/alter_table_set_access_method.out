@@ -98,6 +98,9 @@ SELECT * FROM partitioned_table_6_10 ORDER BY 1, 2;
   7 | 2
 (1 row)
 
+-- altering partitioned tables' access methods is not supported
+SELECT alter_table_set_access_method('partitioned_table', 'columnar');
+ERROR:  you cannot alter access method of a partitioned table
 -- test altering the partition's access method
 SELECT alter_table_set_access_method('partitioned_table_1_5', 'columnar');
 NOTICE:  creating a new table for alter_table_set_access_method.partitioned_table_1_5
