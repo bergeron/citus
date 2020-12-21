@@ -390,7 +390,8 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	/* create shards for hash distributed and reference tables */
 	if (distributionMethod == DISTRIBUTE_BY_HASH)
 	{
-		CreateHashDistributedTableShards(relationId, shardCount, colocatedTableId, localTableEmpty);
+		CreateHashDistributedTableShards(relationId, shardCount, colocatedTableId,
+										 localTableEmpty);
 	}
 	else if (distributionMethod == DISTRIBUTE_BY_NONE)
 	{

@@ -616,7 +616,8 @@ GetTableReplicaIdentityCommand(Oid relationId)
  * to facilitate faster data load.
  */
 List *
-GetPreLoadTableCreationCommands(Oid relationId, bool includeSequenceDefaults, char *accessMethod)
+GetPreLoadTableCreationCommands(Oid relationId, bool includeSequenceDefaults,
+								char *accessMethod)
 {
 	List *tableDDLEventList = NIL;
 

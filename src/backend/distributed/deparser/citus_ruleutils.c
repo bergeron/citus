@@ -248,7 +248,8 @@ pg_get_sequencedef(Oid sequenceRelationId)
  * DEFAULT clauses for columns getting their default values from a sequence.
  */
 char *
-pg_get_tableschemadef_string(Oid tableRelationId, bool includeSequenceDefaults, char *accessMethod)
+pg_get_tableschemadef_string(Oid tableRelationId, bool includeSequenceDefaults,
+							 char *accessMethod)
 {
 	char relationKind = 0;
 	bool firstAttributePrinted = false;
