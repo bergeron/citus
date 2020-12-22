@@ -265,15 +265,6 @@ alter_table_set_access_method(PG_FUNCTION_ARGS)
 void
 UndistributeTable(TableConversion *con)
 {
-	Relation relation = try_relation_open(con->relationId, ExclusiveLock);
-	if (relation == NULL)
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because no such distributed table exists")));
-	}
-
-	relation_close(relation, NoLock);
-
 	if (!IsCitusTable(con->relationId))
 	{
 		ereport(ERROR, (errmsg("cannot undistribute table "
@@ -299,15 +290,6 @@ UndistributeTable(TableConversion *con)
 void
 AlterDistributedTable(TableConversion *con)
 {
-	Relation relation = try_relation_open(con->relationId, ExclusiveLock);
-
-	if (relation == NULL)
-	{
-		ereport(ERROR, (errmsg("cannot alter table because no such "
-							   "distributed table exists")));
-	}
-	relation_close(relation, NoLock);
-
 	if (!IsCitusTableType(con->relationId, DISTRIBUTED_TABLE))
 	{
 		ereport(ERROR, (errmsg("cannot alter table because the table "
@@ -374,15 +356,6 @@ AlterDistributedTable(TableConversion *con)
 void
 AlterTableSetAccessMethod(TableConversion *con)
 {
-	Relation relation = try_relation_open(con->relationId, ExclusiveLock);
-
-	if (relation == NULL)
-	{
-		ereport(ERROR, (errmsg("cannot alter table because no such "
-							   "distributed table exists")));
-	}
-	relation_close(relation, NoLock);
-
 	EnsureTableNotReferencing(con->relationId);
 	EnsureTableNotReferenced(con->relationId);
 	EnsureTableNotForeign(con->relationId);
@@ -646,6 +619,17 @@ CreateTableConversion(char conversionType, Oid relationId, char *distributionCol
 	con->cascadeToColocatedIsNull = cascadeToColocatedIsNull;
 	con->cascadeToColocated = cascadeToColocated;
 
+	Relation relation = try_relation_open(con->relationId, ExclusiveLock);
+	if (relation == NULL)
+	{
+		ereport(ERROR, (errmsg("cannot complete operation "
+							   "because no such table exists")));
+	}
+	relation_close(relation, NoLock);
+	con->distributionKey =
+		BuildDistributionKeyFromColumnName(relation, con->distributionColumn);
+
+	con->originalDistributionKey = DistPartitionKey(con->relationId);
 
 	/* calculate original shard count */
 	CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(relationId);
@@ -663,13 +647,6 @@ CreateTableConversion(char conversionType, Oid relationId, char *distributionCol
 
 	con->colocatedTableList = ColocatedTableList(con->relationId);
 
-
-	Relation relation = try_relation_open(con->relationId, ExclusiveLock);
-	relation_close(relation, NoLock);
-	con->distributionKey =
-		BuildDistributionKeyFromColumnName(relation, con->distributionColumn);
-
-	con->originalDistributionKey = DistPartitionKey(con->relationId);
 
 	if (conversionType == UNDISTRIBUTE_TABLE)
 	{
